@@ -8,7 +8,6 @@ from utils.helpers import *
 from loader.dataloader import MIDI_Loader, MIDI_Render
 
 s_dir = ""  # folder address
-midi_path = "/Users/wxn/Desktop/surf/Music-SketchNet-master/data/IrishFolkSong/session/sessiontune10.mid"
 save_path = s_dir + "model_backup/"
 
 # initial parameters
@@ -293,6 +292,7 @@ if __name__ == '__main__':
 
     # load midi
     # Todo: change the data loader
+    midi_path = "/Users/wxn/Desktop/surf/Music-SketchNet-master/data/IrishFolkSong/session/sessiontune10.mid"
     ml = MIDI_Loader("Irish", minStep=0.5 / 6)
     ml.load_single_midi(midi_path)
     data = ml.processed_all()
@@ -321,4 +321,4 @@ if __name__ == '__main__':
                     res.append(cccc)
 
     data = {'notes': res}
-    m.data2midi(data)
+    m.data2midi(data, output="test.mid")
