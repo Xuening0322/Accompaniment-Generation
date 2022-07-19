@@ -1,22 +1,15 @@
-import os
-import copy
-import random
 import numpy as np
-import pretty_midi as pyd
-import torch
-import time
-from torch import optim
 from torch.nn import functional as F
 from SketchVAE.sketchvae import SketchVAE
 from torch import optim
 from torch.utils.data import Dataset, DataLoader, TensorDataset
-from torch.distributions import Normal
 from SketchNet.sketchnet import SketchNet
 from utils.helpers import *
-from loader.dataloader import MIDI_Loader
+from loader.dataloader import MIDI_Loader, MIDI_Render
 
 s_dir = ""  # folder address
 midi_path = "/Users/wxn/Desktop/surf/Music-SketchNet-master/data/IrishFolkSong/session/sessiontune10.mid"
+save_path = s_dir + "model_backup/"
 
 # initial parameters
 zp_dims = 128
@@ -27,13 +20,11 @@ combine_dims = 512
 combine_head = 4
 combine_num = 4
 pf_num = 2
+# Todo: change the following parameters to fit in the customized dataset
 inpaint_len = 4
 seq_len = 16
 total_len = 16
 batch_size = 1
-n_epochs = 15
-lr = 1e-4
-decay = 0.9999
 
 # for vae init
 vae_hidden_dims = 1024
@@ -122,104 +113,6 @@ def processed_data_tensor(data):
     return TensorDataset(px, rx, len_x, nrx, gd)
 
 
-# load data from Midis, because bpm = 120，so one beat time = 60 / 120 = 0.5
-# And in 4/4 we divide 4 beat to 24 step/frames, each will be 0.5 * 4 / 24  = 0.5 / 6 sec
-# Todo: change minStep for our dataset
-
-ml = MIDI_Loader("Irish", minStep=0.5 / 6)
-ml.load_single_midi(midi_path)
-data = ml.processed_all()
-for d in data:
-    del d['raw']
-
-# process rhythm and pitch tokens
-split_size = 24
-new_data = []
-# change here to be train_x/validate_x/test_x
-for i, d in enumerate(data):
-    d = np.array(d["notes"])
-    ds = np.split(d, list(range(split_size, len(d), split_size)))
-    data = []
-    for sd in ds:
-        if len(sd) != split_size:
-            continue
-        q, k = extract_note(sd)
-        if k == 0:
-            continue
-        s = extract_rhythm(sd)
-        data.append([sd, q, s, k])
-    new_data.append(data)
-    if i % 1000 == 0:
-        print("processed:", i)
-
-# extract each measure in each song
-length = int(len(new_data[0]) / 16)
-res = []
-for i in range(length):
-    res.append(np.array(new_data[0][16 * i:16 * (i + 1)]))
-print(res)
-
-validate_set = res
-print(validate_set)
-print(validate_set[0][0])
-print(len(validate_set[0][1]))
-validate_loader = DataLoader(
-    dataset=processed_data_tensor(validate_set),
-    batch_size=1,
-    shuffle=False,
-    num_workers=8,
-    pin_memory=True,
-    drop_last=False
-)
-
-validate_data = []
-for i, d in enumerate(validate_loader):
-    validate_data.append(d)
-print(len(validate_data))
-
-# load VAE model
-vae_model = SketchVAE(
-    vae_input_dims, vae_pitch_dims, vae_rhythm_dims, vae_hidden_dims,
-    vae_zp_dims, vae_zr_dims, vae_seq_len, vae_beat_num, vae_tick_num, 4000)
-dic = torch.load("model_backup/sketchvae-loss_0.04306925100494333_acc_0.9972101456969356_epoch_26_it_174824.pt")
-
-for name in list(dic.keys()):
-    dic[name.replace('module.', '')] = dic.pop(name)
-vae_model.load_state_dict(dic)
-
-if torch.cuda.is_available():
-    print('Using: ', torch.cuda.get_device_name(torch.cuda.current_device()))
-    vae_model.cuda()
-else:
-    print('Using: CPU')
-vae_model.eval()
-print(vae_model.training)
-
-# import model
-save_path = s_dir + "model_backup/"
-save_period = 5
-
-# think about traning with mse
-model = SketchNet(
-    zp_dims, zr_dims,
-    pf_dims, gen_dims, combine_dims,
-    pf_num, combine_num, combine_head,
-    inpaint_len, total_len,
-    vae_model, True
-)
-dic = torch.load(save_path + "sketchNet-stage-1loss_0.5944014993628857_acc_0.8705233683628317_epoch_90_it_111870.pt")
-for name in list(dic.keys()):
-    dic[name.replace('module.', '')] = dic.pop(name)
-model.load_state_dict(dic)
-model.set_stage("sketch")
-
-if torch.cuda.is_available():
-    print('Using: ', torch.cuda.get_device_name(torch.cuda.current_device()))
-    model.cuda()
-else:
-    print('Using: CPU')
-
-
 def process_raw_x(raw_x, n_past, n_inpaint, n_future):
     raw_px, raw_rx, raw_len_x, raw_nrx, raw_gd = raw_x
     past_px = raw_px[:, :n_past, :]
@@ -251,25 +144,118 @@ def get_acc(recon, gd):
     return np.sum(recon == gd) / recon.size
 
 
-model.set_stage("sketch")
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# load data from Midis, because bpm = 120，so one beat time = 60 / 120 = 0.5
+# And in 4/4 we divide 4 beat to 24 step/frames, each will be 0.5 * 4 / 24  = 0.5 / 6 sec
+# Todo: change minStep for our dataset
 
-save_period = 5
-losses = []
-step = 0
-n_past = 6
-n_future = 10
-n_inpaint = 4
-iteration = 0
-output = []
-v_mean_loss = 0.0
-v_mean_acc = 0.0
-total = 0
-print(vae_model.training)
-for i in range(1):
+def preprocessing(data):
+    for d in data:
+        del d['raw']
+    # process rhythm and pitch tokens
+    split_size = 24
+    new_data = []
+    for i, d in enumerate(data):
+        d = np.array(d["notes"])
+        ds = np.split(d, list(range(split_size, len(d), split_size)))
+        data = []
+        for sd in ds:
+            if len(sd) != split_size:
+                continue
+            q, k = extract_note(sd)
+            if k == 0:
+                continue
+            s = extract_rhythm(sd)
+            data.append([sd, q, s, k])
+        new_data.append(data)
+        if i % 1000 == 0:
+            print("processed:", i)
+
+    # extract each measure in each song
+    length = int(len(new_data[0]) / 16)
+    res = []
+    for i in range(length):
+        res.append(np.array(new_data[0][16 * i:16 * (i + 1)]))
+    print(res)
+
+    validate_set = res
+    print(validate_set)
+    print(validate_set[0][0])
+    print(len(validate_set[0][1]))
+    validate_loader = DataLoader(
+        dataset=processed_data_tensor(validate_set),
+        batch_size=1,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+        drop_last=False
+    )
+
+    validate_data = []
+    for i, d in enumerate(validate_loader):
+        validate_data.append(d)
+    print(len(validate_data))
+    return validate_data
+
+
+def load_vae():
+    # load VAE model
+    vae_model = SketchVAE(
+        vae_input_dims, vae_pitch_dims, vae_rhythm_dims, vae_hidden_dims,
+        vae_zp_dims, vae_zr_dims, vae_seq_len, vae_beat_num, vae_tick_num, 4000)
+    dic = torch.load("model_backup/sketchvae-loss_0.04306925100494333_acc_0.9972101456969356_epoch_26_it_174824.pt")
+
+    for name in list(dic.keys()):
+        dic[name.replace('module.', '')] = dic.pop(name)
+    vae_model.load_state_dict(dic)
+
+    if torch.cuda.is_available():
+        print('Using: ', torch.cuda.get_device_name(torch.cuda.current_device()))
+        vae_model.cuda()
+    else:
+        print('Using: CPU')
+    vae_model.eval()
+    print(vae_model.training)
+    return vae_model
+
+
+def load_model():
+    # load SketchNet
+    model = SketchNet(
+        zp_dims, zr_dims,
+        pf_dims, gen_dims, combine_dims,
+        pf_num, combine_num, combine_head,
+        inpaint_len, total_len,
+        vae_model, True
+    )
+    dic = torch.load(
+        save_path + "sketchNet-stage-1loss_0.5944014993628857_acc_0.8705233683628317_epoch_90_it_111870.pt")
+    for name in list(dic.keys()):
+        dic[name.replace('module.', '')] = dic.pop(name)
+    model.load_state_dict(dic)
+    model.set_stage("sketch")
+
+    if torch.cuda.is_available():
+        print('Using: ', torch.cuda.get_device_name(torch.cuda.current_device()))
+        model.cuda()
+    else:
+        print('Using: CPU')
+    return model
+
+
+def model_eval(inference_data):
+    # sketch parameters
+    n_past = 6
+    n_future = 10
+    n_inpaint = 4
+    output = []
+
+    v_mean_loss = 0.0
+    v_mean_acc = 0.0
+    total = 0
+
     val = []
-    val.append(validate_data[i])
-    v_raw_x = process_raw_x(validate_data[i], n_past, n_inpaint, n_future)
+    val.append(inference_data)
+    v_raw_x = process_raw_x(inference_data, n_past, n_inpaint, n_future)
     for k in range(len(v_raw_x)):
         v_raw_x[k] = v_raw_x[k].to(device=device, non_blocking=True)
     v_past_px, v_past_rx, v_past_len_x, v_past_nrx, v_past_gd, \
@@ -300,19 +286,39 @@ for i in range(1):
         }
     )
     print(output)
+    return output
 
-from loader.dataloader import MIDI_Render
 
-m = MIDI_Render("Irish", minStep=0.5 / 6)
-print(output[0]["gd"])
-output[0]["notes"] = output[0]["gd"]
-res = []
-for c in output[0]["gd"]:
-    print("____")
-    for cc in c:
-        for ccc in c:
-            for cccc in ccc:
-                res.append(cccc)
+if __name__ == '__main__':
 
-data = {'notes': res}
-m.data2midi(data)
+    # load midi
+    # Todo: change the data loader
+    ml = MIDI_Loader("Irish", minStep=0.5 / 6)
+    ml.load_single_midi(midi_path)
+    data = ml.processed_all()
+    validate_data = preprocessing(data)
+    # load vae model
+    vae_model = load_vae()
+    # load SketchNet
+    model = load_model()
+    model.set_stage("sketch")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print(vae_model.training)
+    inference_data = validate_data[0]
+    output = model_eval(inference_data)
+
+    # render midi
+    m = MIDI_Render("Irish", minStep=0.5 / 6)
+    print(output[0]["gd"])
+    output[0]["notes"] = output[0]["gd"]
+    res = []
+    for c in output[0]["gd"]:
+        print("____")
+        for cc in c:
+            for ccc in c:
+                for cccc in ccc:
+                    res.append(cccc)
+
+    data = {'notes': res}
+    m.data2midi(data)
