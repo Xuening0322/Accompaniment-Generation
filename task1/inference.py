@@ -292,7 +292,7 @@ if __name__ == '__main__':
 
     # load midi
     # Todo: change the data loader
-    midi_path = "/Users/wxn/Desktop/surf/Music-SketchNet-master/data/IrishFolkSong/session/sessiontune10.mid"
+    midi_path = "../data/IrishFolkSong/session/sessiontune10.mid"
     ml = MIDI_Loader("Irish", minStep=0.5 / 6)
     ml.load_single_midi(midi_path)
     data = ml.processed_all()
