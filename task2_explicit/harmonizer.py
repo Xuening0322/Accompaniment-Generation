@@ -1,10 +1,12 @@
 import os
 import numpy as np
 from music21 import *
-from mido import MidiFile, MidiTrack, MetaMessage
-from .loader import get_filenames, convert_files
-from .model import build_model
-from .config import *
+import pretty_midi
+import math
+from mido import MidiFile, MidiTrack, MetaMessage, bpm2tempo, tempo2bpm
+from loader import get_filenames, convert_files
+from model import build_model
+from config import *
 from tqdm import trange
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
@@ -53,7 +55,144 @@ def predict(song, model):
     return chord_list
 
 
-def export_music(score, chord_list, gap_list, filename):
+def clamp_midi_data(input_midi_data):
+    tempo = input_midi_data.get_tempo_changes()[1][0]
+
+    original_end_time = input_midi_data.instruments[0].notes[-1].end
+    # end_time -> beats
+    original_end_beat = (original_end_time / 60) * tempo
+
+    end_time = math.ceil((60 / tempo) * original_end_beat / 2) * 2
+    # end_time = input_midi_data.tick_to_time(last_tick)
+    # extends first and last note to the end
+    input_midi_data.instruments[0].notes[0].start = 0
+    input_midi_data.instruments[0].notes[-1].end = end_time
+
+
+def quantize_midi_data(input_midi_data: pretty_midi.PrettyMIDI):
+    starts = input_midi_data.get_onsets()
+    tempo = input_midi_data.get_tempo_changes()[1][0]
+
+    def quantize(time):
+
+        beat = round((time / 60) * tempo * 8) / 8
+
+        new_time = ((beat / tempo) * 60)
+
+        return new_time
+
+    # get ends:
+    ends = [note.end for note in input_midi_data.instruments[0].notes]
+    delete_notes_index = []
+
+    for i, note in enumerate(input_midi_data.instruments[0].notes):
+        note.start = quantize(note.start)
+        note.end = quantize(note.end)
+        if i != 0:
+            if note.start == input_midi_data.instruments[0].notes[i - 1].start:
+                # choose longest => choose last end
+                if note.end > input_midi_data.instruments[0].notes[i - 1].end:
+                    delete_notes_index.append(i - 1)
+                else:
+                    delete_notes_index.append(i)
+            elif note.start >= input_midi_data.instruments[0].notes[i - 1].start and note.start < \
+                    input_midi_data.instruments[0].notes[i - 1].end:
+                input_midi_data.instruments[0].notes[i - 1].end = note.start
+
+    input_midi_data.instruments[0].notes = [
+        note for i, note in enumerate(input_midi_data.instruments[0].notes) if i not in delete_notes_index
+    ]
+
+
+def _print_notes(input_midi_data):
+    for note in input_midi_data.instruments[0].notes:
+        print(note)
+
+
+def preprocess(input_midi_path):
+    input_midi_data = pretty_midi.PrettyMIDI(input_midi_path)
+    # _print_notes(input_midi_data)
+    clamp_midi_data(input_midi_data)
+    quantize_midi_data(input_midi_data)
+    # _print_notes(input_midi_data)
+    # write midi data
+    # output_midi_path = ''.join(input_midi_path.split('.')[:-1]) + '_preprocessed.mid'
+    # print(output_midi_path)
+    output_midi_path = input_midi_path
+    input_midi_data.write(output_midi_path)
+
+    return output_midi_path
+
+
+def adjust_chord(input_path, output_path):
+
+    mid = pretty_midi.PrettyMIDI(input_path)
+    nn = []
+    tempo = int(mid.get_tempo_changes()[1])
+    expected_end_time = 60 / tempo * 16 * 4
+    mid.instruments[1].program = 0
+
+    for note in mid.instruments[1].notes:
+        nn.append([note.start, note.end, note.pitch, note.velocity])
+    nn.sort(key=lambda x: (x[0], x[1]), reverse=False)
+    duration = set([])
+    for i in range(len(nn)):
+        duration.add(nn[i][1] - nn[i][0])
+    min_duration = min(duration)
+
+    for i in range(len(nn)):
+        if nn[i][1] - nn[i][0] != min_duration:
+            nn[i][1] = nn[i][0] + min_duration
+
+    time_d = {}
+    for i in nn:
+        if i[0] not in time_d:
+            time_d[i[0]] = 1
+        else:
+            time_d[i[0]] += 1
+
+    for i in time_d.keys():
+        if time_d[i] == 1:
+            for j in range(len(nn)):
+                if nn[j][0] == i:
+                    # j: index
+                    pre = nn[j - 3: j]
+                    pitch = []
+                    for k in pre:
+                        pitch.append(k[2])
+                    pitch.remove(nn[j][2])
+                    for p in pitch:
+                        nn.append([nn[j][0], nn[j][0] + min_duration, p, 90])
+        if time_d[i] == 2:
+            for j in range(len(nn)):
+                if nn[j][0] == i:
+                    # j: the first index
+                    pre = nn[j - 3: j]
+                    pitch = []
+                    for k in pre:
+                        pitch.append(k[2])
+                    pitch.remove(nn[j][2])
+                    pitch.remove(nn[j + 1][2])
+                    for p in pitch:
+                        nn.append([nn[j][0], nn[j][0] + min_duration, p, 90])
+
+    nn.sort(key=lambda x: (x[0], x[1]), reverse=False)
+
+    if nn[-1][1] != expected_end_time:
+        nn[-1][1] = expected_end_time
+        nn[-2][1] = expected_end_time
+        nn[-3][1] = expected_end_time
+
+    new = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    piano = pretty_midi.Instrument(program=0)
+    for n in nn:
+        piano.notes.append(pretty_midi.Note(start=n[0], end=n[1], pitch=n[2], velocity=n[3]))
+    new.instruments.append(mid.instruments[0])
+    new.instruments.append(piano)
+    new.write(output_path)
+
+
+def export_music(score, chord_list, gap_list, filename, midi_tempo):
     harmony_list = []
     filepath = filename
     filename = os.path.basename(filename)
@@ -86,11 +225,10 @@ def export_music(score, chord_list, gap_list, filename):
     output_filename = OUTPUTS_PATH + '/' + filename + '_chord.mid'
     score.write('midi', fp=output_filename)
 
-    # Todo: reset the chord track tempo, change the parameters
     mid = MidiFile(output_filename)
     for msg in mid.tracks[0]:
         if msg.type == 'set_tempo':
-            msg.tempo = 750000
+            msg.tempo = midi_tempo
     mid.save(output_filename)
 
     # insert the chord track into the original melody file
@@ -105,15 +243,22 @@ def export_music(score, chord_list, gap_list, filename):
                 new_track.append(msg)
 
     new_mid.tracks.insert(1, new_track)
-    new_mid.save(OUTPUTS_PATH + '/' + filename + '_all.mid')
-    return OUTPUTS_PATH + '/' + filename + '_all.mid'
+    new_mid_path = OUTPUTS_PATH + '/' + filename + '_all.mid'
+    new_mid.save(new_mid_path)
+
+    preprocess(new_mid_path)
+    adjust_chord(new_mid_path, OUTPUTS_PATH + '/' + filename + '_all_adjusted.mid')
 
 
 def generate_chord(midi_path):
     # Build model
-    model = build_model(weights_path='XGeneration/task2_explicit/weights.hdf5')
+    model = build_model(weights_path='weights.hdf5')
     data_corpus = convert_files([midi_path], fromDataset=False)
-    output_path = ''
+
+    mid = MidiFile(midi_path)
+    for msg in mid.tracks[0]:
+        if msg.type == "set_tempo":
+            midi_tempo = msg.tempo
     # Process each melody sequence
     for idx in trange(len(data_corpus)):
         melody_vecs = data_corpus[idx][0]
@@ -122,27 +267,10 @@ def generate_chord(midi_path):
         filename = data_corpus[idx][3]
 
         chord_list = predict(melody_vecs, model)
-        output_path = export_music(score, chord_list, gap_list, filename)
-
-    return output_path
+        export_music(score, chord_list, gap_list, filename, midi_tempo)
 
 
 if __name__ == '__main__':
 
-    generate_chord('/home/ld/folder/chord_generation/inputs/demo_20220723_040437.mid')
+    generate_chord('/root/chord_generation/demo_20220730_031258_preprocessed.mid')
 
-    # # Build model
-    # model = build_model(weights_path='weights.hdf5')
-    # # filenames = get_filenames(input_dir=INPUTS_PATH)
-    # filenames = ['/home/ld/folder/chord_generation/inputs/demo_20220723_040437.mid']
-    # data_corpus = convert_files(filenames, fromDataset=False)
-    #
-    # # Process each melody sequence
-    # for idx in trange(len(data_corpus)):
-    #     melody_vecs = data_corpus[idx][0]
-    #     gap_list = data_corpus[idx][1]
-    #     score = data_corpus[idx][2]
-    #     filename = data_corpus[idx][3]
-    #
-    #     chord_list = predict(melody_vecs, model)
-    #     export_music(score, chord_list, gap_list, filename)
