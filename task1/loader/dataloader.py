@@ -43,6 +43,23 @@ class MIDI_Loader:
                         print("processed:%d" % (total + 1))
                     total = total + 1
         print("loading %s success! %d files in total" % (directory, len(self.midi_files)))
+
+        if self.datasetName == "POP909":
+            for midi_file in path:
+                if not midi_file.endswith(".mid"):
+                    continue
+                temp = pyd.PrettyMIDI(directory + midi_file)
+                # useless midi file
+                if len(temp.instruments) == 0 or len(temp.instruments[0].notes) == 0:
+                    print("useless file " + midi_file)
+                    continue
+                tsc = temp.time_signature_changes
+                if len(tsc) == 1 and tsc[0].numerator == 4 and tsc[0].denominator == 4:
+                    self.midi_files.append({"name": (midi_file.split("."))[0], "raw": temp})
+                    if total % 1000 == 0:
+                        print("processed:%d" % (total + 1))
+                    total = total + 1
+        print("loading %s success! %d files in total" % (directory, len(self.midi_files)))
         return None
 
     def load_single_midi(self, midi_file):
@@ -59,6 +76,18 @@ class MIDI_Loader:
             tsc = temp.time_signature_changes
             if len(tsc) == 1 and tsc[0].numerator == 4 and tsc[0].denominator == 4:
                 self.midi_files.append({"name": (midi_file.split("."))[0], "raw": temp})
+
+        if self.datasetName == "POP909":
+            if not midi_file.endswith(".mid"):
+                print("not a midi file")
+            temp = pyd.PrettyMIDI(midi_file)
+            # useless midi file
+            if len(temp.instruments) == 0 or len(temp.instruments[0].notes) == 0:
+                print("useless midi file")
+            tsc = temp.time_signature_changes
+            if len(tsc) == 1 and tsc[0].numerator == 4 and tsc[0].denominator == 4:
+                self.midi_files.append({"name": (midi_file.split("."))[0], "raw": temp})
+
         return None
 
     def getChordSeq(self, recogLevel="Mm"):
@@ -67,7 +96,7 @@ class MIDI_Loader:
         if self.datasetName == "Nottingham":
             # 25 one hot vectors
             # 0-11 for major
-            # 12-23 for minor 
+            # 12-23 for minor
             # 24 for NC
             for i in range(len(self.midi_files)):
                 midi_data = self.midi_files[i]["raw"]
@@ -115,15 +144,21 @@ class MIDI_Loader:
             print("calc chords success! %d files in total" % len(self.midi_files))
             return self.midi_files
         if self.datasetName == "Irish":
-            print("Error:Irish Folk Song dataset has no chord")
+            print("Error: Irish Folk Song dataset has no chord")
             return None
         print("Error: No dataset called " + self.datasetName)
+
+        if self.datasetName == "POP909":
+            print("Error: POP909 Song dataset has no chord")
+            return None
+        print("Error: No dataset called " + self.datasetName)
+
         return None
 
     def getNoteSeq(self):
         print("start to get notes")
         if self.datasetName == "Nottingham":
-            # 130 one hot vectors 
+            # 130 one hot vectors
             # 0-127 for pitch
             # 128 for hold 129 for rest
             rest_pitch = 129
@@ -167,13 +202,14 @@ class MIDI_Loader:
                 self.midi_files[i]["notes"] = pitch_file[:]
             print("calc notes success! %d files in total" % len(self.midi_files))
             return self.midi_files
-        if self.datasetName == "Irish":
-            # 130 one hot vectors 
+        if self.datasetName == "POP909":
+            # 130 one hot vectors
             # 0-127 for pitch
             # 128 for hold 129 for rest
             rest_pitch = 129
             hold_pitch = 128
-            c_bias = 1.0 / 960
+            # c_bias = 1.0 / 960
+            c_bias = 0
             for i in range(len(self.midi_files)):
                 midi_data = self.midi_files[i]["raw"]
                 pitch_file = []
@@ -253,6 +289,12 @@ class MIDI_Loader:
             print("processing succeed")
             return self.midi_files
 
+        if self.datasetName == "POP909":
+            print("start process POP909 Song dataset")
+            self.getNoteSeq()
+            print("processing succeed")
+            return self.midi_files
+
     def writeFile(self, output=""):
         print("begin write file from %s" % self.directory)
         for midi_file in self.midi_files:
@@ -280,12 +322,12 @@ class MIDI_Render:
         self.datasetName = datasetName
         self.minStep = minStep
 
-    def data2midi(self, data, recogLevel="Mm", output="test.mid"):
+    def data2midi(self, data, recogLevel="Mm", output="task2_explicit.mid"):
         gen_midi = pyd.PrettyMIDI()
         melodies = pyd.Instrument(program=pyd.instrument_name_to_program('Acoustic Grand Piano'))
         chords = pyd.Instrument(program=pyd.instrument_name_to_program('Acoustic Grand Piano'))
         if self.datasetName == "Nottingham":
-            # 130 one hot vectors 
+            # 130 one hot vectors
             # 0-127 for pitch
             # 128 for hold 129 for rest
             rest_pitch = 129
@@ -352,7 +394,7 @@ class MIDI_Render:
             gen_midi.write(output)
             print("finish render midi on " + output)
         if self.datasetName == "Irish":
-            # 130 one hot vectors 
+            # 130 one hot vectors
             # 0-127 for pitch
             # 128 for hold 129 for rest
             rest_pitch = 129
@@ -388,12 +430,12 @@ class MIDI_Render:
             gen_midi.write(output)
             print("finish render midi on " + output)
 
-    def text2midi(self, text_ad, recogLevel="Mm", output="test.mid"):
+    def text2midi(self, text_ad, recogLevel="Mm", output="task2_explicit.mid"):
         gen_midi = pyd.PrettyMIDI()
         melodies = pyd.Instrument(program=pyd.instrument_name_to_program('Acoustic Grand Piano'))
         chords = pyd.Instrument(program=pyd.instrument_name_to_program('Acoustic Grand Piano'))
         if self.datasetName == "Nottingham":
-            # 130 one hot vectors 
+            # 130 one hot vectors
             # 0-127 for pitch
             # 128 for hold 129 for rest
             rest_pitch = 129
@@ -522,7 +564,7 @@ class DataLoader:
             if i % 1000 == 0:
                 print("processed: %d\tdivision: %d" % (i, len(self.validate_set)))
             i = i + 1
-        print("begin processing test:")
+        print("begin processing task2_explicit:")
         i = 0
         for d in self.test:
             d = np.array(d["notes"])
