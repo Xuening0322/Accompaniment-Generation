@@ -11,9 +11,27 @@ Problems may occur in the *adjust_chord* function in *harmonizer.py*
 
 ### Task 3: Accompaniment Generation
 
-Baseline system: Accomontage
+### References:
 
+```tex
+@inproceedings{music-sketchnet,
+         author = {Ke Chen and Cheng-i Wang and Taylor Berg-Kirkpatrick and Shlomo Dubnov},
+         title = {Music SketchNet: Controllable Music Generation via Factorized Representations of Pitch and Rhythm},
+         booktitle = {Proceedings of the 21th International Society for Music Information Retrieval Conference, {ISMIR}},
+         year = {2020}
+}
 ```
+
+```tex
+@article{lim2017chord,
+  title={Chord generation from symbolic melody using BLSTM networks},
+  author={Lim, Hyungui and Rhyu, Seungyeon and Lee, Kyogu},
+  journal={arXiv preprint arXiv:1712.01011},
+  year={2017}
+}
+```
+
+```tex
 @inproceedings{zhao2021accomontage,
   author    = {Jingwei Zhao and Gus Xia},
   title     = {AccoMontage: Accompaniment Arrangement via Phrase Selection and Style Transfer},
