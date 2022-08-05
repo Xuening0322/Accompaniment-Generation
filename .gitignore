@@ -1,14 +1,5 @@
-# task1
-task1/data/*
-task1/generation_result_npy/*
-task1/model_backup/*
-task1/music_sketchnet_samples/*
-task1/reference
-
 # data
 data/*
 
 
-# ignore all .idea
-task1/.idea/*
 
