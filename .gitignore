@@ -12,3 +12,4 @@ data/*
 # ignore all .idea
 task1/.idea/*
 
+*/Icon?

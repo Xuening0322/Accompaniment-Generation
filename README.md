@@ -1,6 +1,6 @@
 # Accompaniment-Generation
 
-Repository for SURF 2022
+Repository for SURF 2022. Please find the final version [here](https://github.com/Humming-Tacos/XGeneration).
 
 ### Task 1: Melody Continuation
 
